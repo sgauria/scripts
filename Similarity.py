@@ -40,10 +40,19 @@ def compare_files(files, thresh, accuracy=0):
     print "%10f\t%s\t%s"%(i[0], str(i[1]).ljust(maxwidth), str(i[2]).ljust(maxwidth))
 
 def main():
-  parser = argparse.ArgumentParser(description="Take a list of files and try to find files that are similar.\n  These files could be candidates for merging, or suspects for copying, etc. What you do with them is your business :)")
-  parser.add_argument("-t", "--threshold", type=float, default=0.95, help="only show file pairs whose similarity is greater than the threshold [default = %(default).2f]")
-  parser.add_argument("-a", "--accuracy", type=int, choices=[0, 1, 2], default=1, help="accuracy level of comparisons. level 2 is quite slow")
-  parser.add_argument('files', nargs='+', help="list of files to analyze")
+  parser = argparse.ArgumentParser(description="Take a list of files and try to find files that are similar. "
+      "These files could be candidates for merging, or suspects for copying, etc. "
+      "What you do with them is your business :)")
+
+  parser.add_argument("-t", "--threshold", type=float, default=0.95, 
+      help="only show file pairs whose similarity is greater than the threshold [default = %(default).2f]")
+
+  parser.add_argument("-a", "--accuracy", type=int, choices=[0, 1, 2], default=1, 
+      help="accuracy level of comparisons. '2' is quite slow. [default = %(default)i]")
+
+  parser.add_argument('files', nargs='+', 
+      help="list of files to analyze")
+  
   args = parser.parse_args()
 
   compare_files(args.files, args.threshold, args.accuracy)
