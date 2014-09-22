@@ -1,0 +1,63 @@
+#!/usr/bin/env perl
+
+# syn_paths_compare [OLD_LOG [NEW_LOG]]
+
+# Simple wrapper script around syn_paths to compare old and new synthesis runs with matching stop_count and min_print.
+# This can be used (and is most useful to use) while the newer synthesis is still running.
+# Calls syn_paths 3 times.
+
+# Pick up old log and new log from the cmd line if supplied, and fill out missing ones by looking at ls output.
+
+# Sameer Gauria <sgauria@ambarella.com>
+
+my ($old_log, $new_log);
+if ($#ARGV == 0) {
+  $old_log = $ARGV[0];
+}
+if ($#ARGV == 1) {
+  $old_log = $ARGV[0];
+  $new_log = $ARGV[1];
+}
+if (not defined $new_log) {
+  $new_log = `ls -tr sge*.log | tail -1`;
+}
+if (not defined $old_log) {
+  $old_log = `ls -tr sge*.log | tail -2 | head -1`;
+}
+chomp $new_log;
+chomp $old_log;
+
+# Parse raw syn_paths output (for new log) to decide what min_print and stop_count values to use.
+my @sp_output_lines = `syn_paths $new_log`;
+
+my @sp_output_paths = grep(/-->/, @sp_output_lines);
+my $last_print_index = ($#sp_output_paths >= 5) ? -5 : 0;
+my $min_print = 10;
+if ($sp_output_paths[$last_print_index] =~ /(\d+)\s*:/) {
+  $min_print = $1;
+}
+
+my @total_num_lines = grep(/Total number of paths/, @sp_output_lines);
+my $stop_count = 0;
+if ($total_num_lines[0] =~ /(\d+)\s*:/) {
+  $stop_count = $1;
+}
+if ($total_num_lines[0] =~ /in full run/) {
+  $stop_count = -1;
+}
+
+# Rerun syn_paths for both logs with the min and stop values we settled on.
+my $cmd_old = "syn_paths $old_log"; 
+my $cmd_new = "syn_paths $new_log";
+$cmd_old .= " -stop $stop_count" if ($stop_count >= 0); 
+$cmd_new .= " -stop $stop_count" if ($stop_count >= 0); 
+$cmd_old .= " -min $min_print";
+$cmd_new .= " -min $min_print";
+
+print "\nOLD : $cmd_old\n";
+system($cmd_old);
+
+print "\nNEW : $cmd_new\n";
+system($cmd_new);
+
+# Done.

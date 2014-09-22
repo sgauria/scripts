@@ -1,0 +1,310 @@
+#!/usr/bin/env perl
+
+# Simple script to print a report of the paths worked on by RC.
+# This list of paths can give better insight into synthesis results than the final WNS path, which is subject to random variation.
+# This script can also be used while RC is still running, for early insight before the run ends and the RC report is generated.
+
+use strict;
+use Term::ANSIColor qw(colored);
+use List::Util qw(max);
+use Getopt::Long;
+use Pod::Usage;
+use Carp::Assert;
+
+#
+# Option Processing
+#
+
+my @default_substitutions = (
+      's/\//_/g',           # replace slashes with underscores
+      's/_[0-9]+_/_N_/g',   # replace _15_ with _N_
+      's/\[[0-9]+\]/[N]/g', # replace [73] with [N]
+    );
+my @user_substitutions    = ();
+my $min_print             = 0;
+my $stop_count            = -1;
+my $help                  = 0;
+my $no_default_subs       = 0;
+my $octave                = 0;
+my $octave_plot           = 0;
+
+GetOptions (
+  "substitutions|subs=s"   => \@user_substitutions,
+  "no_default_subs|nosub!" => \$no_default_subs,
+  "min_print=i"            => \$min_print,
+  "stop_count=i"           => \$stop_count,
+  "octave!"                => \$octave,
+  "plot!"                  => \$octave_plot,
+  "help!"                  => \$help,
+);
+
+if ($help) {
+  pod2usage ({-verbose => 2, -exit_status => 0});
+  exit;
+}
+
+my $logfile;
+$logfile = shift @ARGV;
+if (not defined $logfile) {
+   $logfile = `ls -tr *rc.log | tail -1`;
+}
+
+my @substitutions = $no_default_subs ? (@user_substitutions) : (@default_substitutions, @user_substitutions);
+
+
+# 
+# Actually parse the log file.
+# 
+open (LOG, "<$logfile");
+
+my %paths = ();
+
+my $ps = ""; # path start
+my $pe = ""; # path end
+my $wns = "NA"; # WNS for the last path that we process.
+my (@words, $word, @path_words);
+my $total_count = 0;
+my $partial_run = 1;
+
+# iterate over words, completely ignoring new lines.
+# When we find 'WNS:', the next word is assumed to be the WNS value, followed by 'Path:', $ps, '-->' and $pe.
+# When all 6 words have been found, we are ready to put something in the hash.
+OUTER:
+while (<LOG>) {
+  @words = split;
+  foreach $word (@words) {
+
+    # Stop if we hit the count limit.
+    last OUTER if ($stop_count >= 0 and $total_count >= $stop_count);
+
+    # Keep last 10 words in @path_words shift register.
+    push  @path_words, $word;
+    shift @path_words if ($#path_words > 10); 
+
+    if ($path_words[-6] eq "WNS:" and $path_words[-4] eq "Path:") {
+      $wns = $path_words[-5];
+      $ps  = $path_words[-3];
+      $pe  = $path_words[-1];
+      assert($path_words[-2] eq "-->");
+    } elsif ($path_words[-4] eq "Path:") {
+      $wns = $path_words[-9];
+      $ps  = $path_words[-3];
+      $pe  = $path_words[-1];
+      assert($path_words[-2] eq "-->");
+    } else {
+      if ($path_words[-2] eq 'Normal' and $path_words[-1] eq 'exit.') { $partial_run = 0; } # 'Normal exit' implies run completed.
+      next;
+    }
+
+    # If we are here (i.e. didn't hit the 'next' case), then we actually matched one of the formats above.
+    # Add this path into our hash.
+    foreach my $sub (@substitutions) {
+      eval "\$ps =~ $sub;";
+      eval "\$pe =~ $sub;";
+    }
+    push @{$paths{$ps}{$pe}}, $wns;
+    $total_count++;
+
+    # Not necessary, but makes sure to prevent double counting.
+    @path_words = ();
+
+  }
+}
+my $last_wns = $wns;
+
+# Collect data into a results array.
+my $count;
+my @results = ();
+my $ps_width = 0;
+my $pe_width = 0;
+
+foreach $ps (keys %paths) {
+  foreach $pe (keys %{$paths{$ps}}) {
+    $count = $#{$paths{$ps}{$pe}} + 1;
+    if ($count >= $min_print) {
+      push @results, [$count, $ps, $pe];
+
+      $ps_width = max($ps_width, length($ps));
+      $pe_width = max($pe_width, length($pe));
+    }
+  }
+}
+
+#
+# Print report
+#
+my @sorted_results = sort { $a->[0] <=> $b->[0] } @results;
+
+my $title_str = "Number of times RC worked on a particular path" . ($min_print > 0 ? " (only paths with count >= $min_print)" : "") ." :";
+print "\n$title_str\n";
+$title_str =~ s/./-/g;
+print "$title_str\n"; # print line of dashes.
+
+
+open (OCTAVE_DATA  , ">syn_paths.octave.dat") if ($octave);
+my @octave_vars = ();
+foreach my $r (@sorted_results) {
+  ($count, $ps, $pe) = @$r;
+  my $color = ($count > 100) ? "bold" : "reset";
+  printf colored("%-8d: %-${ps_width}s  --> %-${pe_width}s\n", $color), $count, $ps, $pe;
+  if ($octave) {
+    my $var_name = "${ps}___to___${pe}";
+    $var_name =~ s/\W/_/g;
+    print OCTAVE_DATA "# name : $var_name\n";
+    print OCTAVE_DATA "# type : matrix\n";
+    print OCTAVE_DATA "# rows : $count\n";
+    print OCTAVE_DATA "# columns : 1\n";
+    foreach $wns (@{$paths{$ps}{$pe}}) {
+      print OCTAVE_DATA " $wns\n";
+    }
+    push @octave_vars, $var_name;
+  }
+}
+print "--\n" if ($#sorted_results >= 0) ;
+close(OCTAVE_DATA);
+
+my $total_desc_string = ($stop_count == $total_count) ? "Number of RC paths included in this report" : "Total number of paths worked on by RC" . ( $partial_run ? " so far" : " in full run");
+my $l_wns_desc_string = ($stop_count == $total_count) ? "WNS of last path processed in this report" : "Last WNS reported by RC";
+printf "%-8d: ${total_desc_string}.\n", $total_count;
+print "--\n";
+printf "%-8s: ${l_wns_desc_string}.\n\n", $last_wns;
+
+if ($octave) {
+  open (OCTAVE_SCRIPT, ">syn_paths.octave.scr");
+  print OCTAVE_SCRIPT "load syn_paths.octave.dat;\n";
+  print OCTAVE_SCRIPT "plot(";
+  my $count = 1;
+  foreach my $var (reverse @octave_vars) {
+    print OCTAVE_SCRIPT "," if ($count > 1);
+    print OCTAVE_SCRIPT "$var, '$count-'";
+    $count++;
+    last if ($count > 3);
+  }
+  print OCTAVE_SCRIPT ");\n";
+  print OCTAVE_SCRIPT "pause();\n";
+  close (OCTAVE_SCRIPT);
+
+  if ($octave_plot) {
+    system("octave -q syn_paths.octave.scr");
+  } else {
+    print "Run cmd ' octave -q syn_paths.octave.scr ' to see a plot of the WNS data.\n";
+  }
+}
+
+__END__
+
+=pod
+
+=head1 SUMMARY
+
+Simple script to print a report of the paths that RC worked on.
+This list of paths can give better insight into synthesis results than the final WNS path, which is subject to random variation.
+# This script can also be used while RC is still running, for early insight before the run ends and the RC report is generated.
+
+=head1 DESCRIPTION
+
+The script will grep through the log for all the paths that RC reports it worked on and 
+then print out a sorted grouped list of paths with a count of how many times each path was worked on.
+You should spend your efforts on fixing the paths with the largest counts.
+This also useful to see if your rtl change actually improved a specific path.
+This script is also a good way to get some status of your synthesis run while it is still running.
+
+I also print the last reported WNS number to give a quick idea of the synthesis status.
+Note : WNS stands for 'Worst Negative Slack', i.e. worst violation across all paths.
+
+I do a few standard substitutions on the signal names so that very similar paths are grouped into a single path.
+
+=head1 SYNOPSIS
+
+ syn_paths
+   [ -substitutions|subs=s ]
+   [ no_default_subs|nosub! ]
+   [ min_print=i ]
+   [ stop_count=i ]
+   [ help! ]
+   [ <log file> ]
+
+=head1 OPTIONS
+
+=over 8
+
+=item -substitutions|subs=s
+
+  You can specify -sub 's/xyz/uvw/g' multiple times to modify the grouping as
+  you need.  Note that the substitutions are applied on each signal name, not on
+  the whole path, so you can't modify the path counts or something weird like
+  that.
+
+=item -no_default_subs|nosub!
+
+  Disable the default substitutions in case you want to actually see paths by
+  specific signals.  You can still specify user defined -sub '' options to add
+  your own substitutions.
+  The default substitions are :
+      's/\//_/g',           # replace slashes with underscores
+      's/_[0-9]+_/_N_/g',   # replace _15_ with _N_
+      's/\[[0-9]+\]/[N]/g', # replace [73] with [N]
+
+=item -min_print=i
+
+  You can specify -min <N> to only print paths with count >= N.
+  This is useful to trim the report to only the higher count paths.
+
+=item -stop_count=i
+  
+  -stop <N> will limit the report generation to the first N paths in the log
+  file.  This is useful in the rare case that you want to compare a currently
+  running (incomplete) log file with the equivalent section of an older log
+  file.
+
+=item -octave!
+
+  Dump the WNS data into syn_paths.octave.dat , and create a script to plot the 
+  top 3 paths in syn_paths.octave.scr.  
+  
+  Also launch the plot window if '-plot' is specified.
+
+  Frankly, it's hard to interpret.
+
+=item -help!
+
+  This help.
+
+=item <log file>
+
+  Optionally specify the log file you want the script to parse. If no log file
+  is specified, the script defaults to picking the latest *rc.log file in the
+  current directory.
+
+=back
+
+=head1 EXAMPLES 
+
+ Here are some sample Cmd Lines :
+   syn_paths
+   syn_paths -sub 's/my_signal_[a-f]/my_signal_X/'
+   syn_paths -nosub -sub 's/my_signal_[a-f]/my_signal_X/'
+   syn_paths -min 10
+   syn_paths -stop 244
+   syn_paths sge_lf_script_13697.log
+ 
+
+ Here is some sample output:
+   > syn_paths -min 10 
+
+   Number of times RC worked on a particular path (only paths with count >= 10) :
+   ------------------------------------------------------------------------------
+   16      : dblk_luma_decision_foB_reg_tc__N__CK  --> dblk_fls_p0_reg_N__N__D                          
+   22      : dblk_luma_decision_foB_reg_dE__N__CK  --> dblk_fls_q0_reg_N__N__D                          
+   38      : dblk_luma_decision_foC_reg_dE__N__CK  --> dblk_fls_p1_reg_N__N__D                          
+   97      : dblk_luma_decision_foB_reg_dE__N__CK  --> dblk_fls_p0_reg_N__N__D                          
+   --
+   208     : Total number of paths worked on by RC.
+   --
+   -274    : Last WNS reported by RC.
+
+=head1 AUTHOR
+
+Sameer Gauria <sgauria@ambarella.com>
+
+=cut
