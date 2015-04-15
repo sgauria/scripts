@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head profile="http://selenium-ide.openqa.org/profiles/test-case">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<link rel="selenium.base" href="https://catalog.flls.org/" />
+<title>New Test</title>
+</head>
+<body>
+<table cellpadding="1" cellspacing="1" border="1">
+<thead>
+<tr><td rowspan="1" colspan="3">New Test</td></tr>
+</thead><tbody>
+<!--Would be nice to change these constants into parameters.-->
+<tr>
+	<td>store</td>
+	<td>d000NNNNNNN</td>
+	<td>user_name</td>
+</tr>
+<tr>
+	<td>store</td>
+	<td>DDDD</td>
+	<td>pass_word</td>
+</tr>
+<!---->
+<!--Calculate Today's Date For later reference-->
+<tr>
+	<td>storeEval</td>
+	<td>var d=new Date(); (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear();</td>
+	<td>todays_date</td>
+</tr>
+<tr>
+	<td>echo</td>
+	<td>${todays_date}</td>
+	<td></td>
+</tr>
+<!---->
+<!--Start a new window to avoid interfering with any existing stuff.-->
+<tr>
+	<td>openWindow</td>
+	<td></td>
+	<td>Library</td>
+</tr>
+<tr>
+	<td>selectWindow</td>
+	<td>Library</td>
+	<td></td>
+</tr>
+<!---->
+<!--Login to the website and navigate to the list of Issued Items.-->
+<tr>
+	<td>openAndWait</td>
+	<td>/polaris/logon.aspx</td>
+	<td>Library</td>
+</tr>
+<tr>
+	<td>type</td>
+	<td>id=textboxBarcodeUsername</td>
+	<td>${user_name}</td>
+</tr>
+<tr>
+	<td>type</td>
+	<td>id=textboxPassword</td>
+	<td>${pass_word}</td>
+</tr>
+<tr>
+	<td>clickAndWait</td>
+	<td>id=buttonSubmit</td>
+	<td></td>
+</tr>
+<tr>
+	<td>clickAndWait</td>
+	<td>link=Items Out*</td>
+	<td></td>
+</tr>
+<!---->
+<!--Calculate the number of issued items.-->
+<tr>
+	<td>storeXpathCount</td>
+	<td>//tr[@class='patrongrid-row']</td>
+	<td>row_count1</td>
+</tr>
+<tr>
+	<td>storeXpathCount</td>
+	<td>//tr[@class='patrongrid-alternating-row']</td>
+	<td>row_count2</td>
+</tr>
+<tr>
+	<td>storeEval</td>
+	<td>storedVars['row_count1']+storedVars['row_count2']</td>
+	<td>row_count</td>
+</tr>
+<tr>
+	<td>echo</td>
+	<td>${row_count}</td>
+	<td></td>
+</tr>
+<!---->
+<!--Loop over all the rows now and count the number of books we select to renew.-->
+<tr>
+	<td>store</td>
+	<td>0</td>
+	<td>row</td>
+</tr>
+<tr>
+	<td>store</td>
+	<td>0</td>
+	<td>cnt</td>
+</tr>
+<tr>
+	<td>while</td>
+	<td>(${row} &lt; ${row_count})</td>
+	<td></td>
+</tr>
+<!---->
+<!--  For each row check the due date and the number of renewals left.-->
+<tr>
+	<td>storeText</td>
+	<td>//span[@id=&quot;GridView1_labelDueDate_${row}&quot;]</td>
+	<td>due_date</td>
+</tr>
+<tr>
+	<td>storeText</td>
+	<td>//span[@id=&quot;GridView1_labelRenewalsLeft_${row}&quot;]</td>
+	<td>renewals_left</td>
+</tr>
+<!---->
+<!--  If the due date is today and the number of renewals is greater than zero, then select the book for renewal.-->
+<tr>
+	<td>gotoIf</td>
+	<td>(${due_date} != ${todays_date} || ${renewals_left} &lt; 1)</td>
+	<td>dont_select</td>
+</tr>
+<tr>
+	<td>check</td>
+	<td>//input[@id=&quot;GridView1_chek1_${row}&quot;]</td>
+	<td></td>
+</tr>
+<tr>
+	<td>storeEval</td>
+	<td>storedVars['cnt'] = ${cnt}+1</td>
+	<td></td>
+</tr>
+<tr>
+	<td>label</td>
+	<td>dont_select</td>
+	<td></td>
+</tr>
+<!---->
+<!--  Next iteration of while loop if needed.-->
+<tr>
+	<td>storeEval</td>
+	<td>storedVars['row'] = ${row}+1</td>
+	<td></td>
+</tr>
+<tr>
+	<td>endWhile</td>
+	<td></td>
+	<td></td>
+</tr>
+<!---->
+<!--Actually renew books if we have selected anything.-->
+<tr>
+	<td>gotoIf</td>
+	<td>(${cnt} &lt;= 0)</td>
+	<td>dont_renew</td>
+</tr>
+<tr>
+	<td>clickAndWait</td>
+	<td>if=linkbuttonRenew</td>
+	<td></td>
+</tr>
+<tr>
+	<td>label</td>
+	<td>dont_renew</td>
+	<td></td>
+</tr>
+<!---->
+<!--Log Off to finish up-->
+<tr>
+	<td>clickAndWait</td>
+	<td>id=hyperlinkLogoff</td>
+	<td></td>
+</tr>
+<tr>
+	<td>close</td>
+	<td></td>
+	<td></td>
+</tr>
+</tbody></table>
+</body>
+</html>
