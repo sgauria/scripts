@@ -32,126 +32,159 @@ sub gen_div_by_const_fn{
   $obits //= &clog2( 1.0*(2**$ibits)/$N );
   $fname //= "div_by_${N}_fn";
 
+  # Factorize N into power of 2 (wizard) and non-power of 2(muggle).
+  my $Nw = 1;
+  while (($N % ($Nw * 2)) == 0) { $Nw *= 2; }
+  my $Nm = $N/$Nw;
+
   my $cN = clog2($N);
+  my $cNw = clog2($Nw);
+  my $cNm = clog2($Nm);
+  my $cNWr = $cNw > 1 ? $cNw : 1;
 
   # Header
   my $return_type = "div_result_${ibits}_${N}_t";
   my $output = "";
-  $output .= <<DONE;
+  $output .= <<XYZ;
   typedef struct packed {
     u${obits}_t \tq; // quotient
     u${cN}_t \tr; // remainder
   } $return_type;
+
   function $return_type $fname ( u${ibits}_t x );
    $return_type result;
-DONE
+   u${ibits}_t \twq;
+   u${cNwr}_t \twr;
+XYZ
 
-  if ($N & ($N - 1) == 0) { # $N is a power of 2
-    $output .= <<DONE;
-  begin
-    result.q = x[$ibits-1:$cN];
-    result.r = x[$cN-1:0];
-DONE
+  # Declarations
+  my ($piece_sz, $num_pieces);
+  $piece_sz = $cNm + 2;
+  $num_pieces = 1;
+  $num_pieces *= 2 while ($num_pieces * $piece_sz < $ibits);
 
-  } else { # $N is not a power of 2.
-
-    # Declarations
-    my ($piece_sz, $num_pieces);
-    $piece_sz = $cN + 2;
-    $num_pieces = 1;
-    $num_pieces *= 2 while ($num_pieces * $piece_sz < $ibits);
-
-    my ($np, $ps, $i) = ($num_pieces, $piece_sz, 0);
-    while ($np >= 1) {
-      my $npm1 = $np - 1;
-      $output .= <<DONE;
+  my ($np, $ps, $i) = ($num_pieces, $piece_sz, 0);
+  while ($np >= 1) {
+    my $npm1 = $np - 1;
+    $output .= <<XYZ;
    u${ps}_t \t[$npm1:0] q_${i};
-DONE
-      if ($i > 1) {
-        $output .= <<DONE;
+XYZ
+    if ($i > 1) {
+      $output .= <<XYZ;
    u${ps}_t \t[$npm1:0] aq_${i};
-DONE
-      }
-      if ($i > 0) {
-        $output .= <<DONE;
-   u${cN}_t \t[$npm1:0] r_${i};
-DONE
-        $np /= 2; $ps *= 2; 
-      }
-      $i++;
+XYZ
     }
+    if ($i > 0) {
+      $output .= <<XYZ;
+   u${cNm}_t \t[$npm1:0] r_${i};
+XYZ
+      $np /= 2; $ps *= 2; 
+    }
+    $i++;
+  }
 
-    # End header
-    $output .= <<DONE;
+  # End header
+  $output .= <<XYZ;
   begin
 
-DONE
+XYZ
 
+  if ($Nw > 1) {
+  $output .= <<XYZ;
+    // Handle the power of 2 part first.
+    wq = x[$ibits-1:$cNw];
+    wr = x[$cNw-1:0];
+
+XYZ
+  } else {
+  $output .= <<XYZ;
+    // Handle the power of 2 part first.
+    wq = x;
+    wr = 0;
+
+XYZ
+  }
+
+  if ($Nm > 1) {
     # Calculate first layer : divide each piece by $N.
-    $output .= <<DONE;
+    $output .= <<XYZ;
+    // Now work on the hard part : non-power of 2.
     // Separate input into $num_pieces pieces of size $piece_sz bits each.
-    q_0 = x;
+    q_0 = wq;
 
-    // Divide each piece by $N 
+    // Divide each piece by $Nm 
     q_1 = 0; r_1 = 0;
     for (int i = 0; i < $num_pieces; i++) begin
       case(q_0[i])
-DONE
+XYZ
     foreach $i (1 .. (2**$piece_sz - 1)) {
-      my $i_div_N = int ($i / $N);
-      my $i_mod_N = $i % $N;
-      $output .= <<DONE;
-        $i : begin q_1[i] = $i_div_N; r_1[i] = $i_mod_N; end
-DONE
+      my $i_div_Nm = int ($i / $Nm);
+      my $i_mod_Nm = $i % $Nm;
+      $output .= <<XYZ;
+        $i : begin q_1[i] = $i_div_Nm; r_1[i] = $i_mod_Nm; end
+XYZ
     }
-    $output .= <<DONE;
+    $output .= <<XYZ;
       endcase
     end
 
-DONE
+XYZ
 
     # Refine result as many times as needed.
     my ($np, $ps, $j) = ($num_pieces, $piece_sz, 1);
     while ($np > 1) {
       $np /= 2; $ps *= 2; $j++;
       my $k = $j - 1;
-      $output .= <<DONE;
+      $output .= <<XYZ;
     // Refine result for each pair of pieces
     for (int i = 0; i < $np; i++) begin
       case({r_${k}[2*i+:2]})
-DONE
-      foreach my $rem1 (1 .. ($N-1)) {
-        foreach my $rem2 (0 .. ($N-1)) {
+XYZ
+      foreach my $rem1 (1 .. ($Nm-1)) {
+        foreach my $rem2 (0 .. ($Nm-1)) {
           my $total_rem = ($rem1 << ($ps/2)) + $rem2;
-          my $total_rem_div_N = int($total_rem / $N);
-          my $total_rem_mod_N = $total_rem % $N;
-          $output .= <<DONE;
-        {${cN}'d${rem1}, ${cN}'d${rem2}} : begin aq_${j}[i] = $total_rem_div_N; r_${j}[i] = $total_rem_mod_N; end // rem = $total_rem = $total_rem_div_N * $N + $total_rem_mod_N
-DONE
+          my $total_rem_div_Nm = int($total_rem / $Nm);
+          my $total_rem_mod_Nm = $total_rem % $Nm;
+          $output .= <<XYZ;
+        {${cNm}'d${rem1}, ${cNm}'d${rem2}} : begin aq_${j}[i] = $total_rem_div_Nm; r_${j}[i] = $total_rem_mod_Nm; end // rem = $total_rem = $total_rem_div_Nm * $Nm + $total_rem_mod_Nm
+XYZ
         }
       }
-    $output .= <<DONE;
+      $output .= <<XYZ;
         default      : begin aq_${j}[i] = 0; r_${j}[i] = r_${k}[2*i]; end
       endcase
       q_${j}[i] = q_${k}[2*i+:2] + aq_${j}[i];
     end
 
-DONE
+XYZ
     }
 
     # Final hookup.
-    $output .= <<DONE;
+    $output .= <<XYZ;
     result.q = q_${j}[0];
+XYZ
+    if ($Nw > 1) {
+      $output .= <<XYZ;
+    result.r = r_${j}[0] << $cNw + wr;
+XYZ
+    } else {
+      $output .= <<XYZ;
     result.r = r_${j}[0];
-DONE
+XYZ
+    }
+  } else {
+    $output .= <<XYZ;
+    result.q = wq;
+    result.r = wr;
+XYZ
   }
 
   # Footer
-  $output .= <<DONE;
+  $output .= <<XYZ;
     return result;
   end
   endfunction
-DONE
+XYZ
 
   return $output;
 }
