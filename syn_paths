@@ -10,15 +10,17 @@ use List::Util qw(max);
 use Getopt::Long;
 use Pod::Usage;
 use Carp::Assert;
+use Time::Piece;
+use Time::Seconds;
 
 #
 # Option Processing
 #
 
 my @default_substitutions = (
-      's/\//_/g',           # replace slashes with underscores
-      's/_[0-9]+_/_N_/g',   # replace _15_ with _N_
-      's/\[[0-9]+\]/[N]/g', # replace [73] with [N]
+      's/           \/          /_/gx', # replace slashes with underscores
+      's/ (?<=_)  [0-9]+ (?=_)  /N/gx', # replace _15_ with _N_
+      's/ (?<=\[) [0-9]+ (?=\]) /N/gx', # replace [73] with [N]
     );
 my @user_substitutions    = ();
 my $min_print             = 0;
@@ -31,7 +33,7 @@ my $octave_plot           = 0;
 GetOptions (
   "substitutions|subs=s"   => \@user_substitutions,
   "no_default_subs|nosub!" => \$no_default_subs,
-  "min_print=i"            => \$min_print,
+  "min_print=f"            => \$min_print,
   "stop_count=i"           => \$stop_count,
   "octave!"                => \$octave,
   "plot!"                  => \$octave_plot,
@@ -46,11 +48,38 @@ if ($help) {
 my $logfile;
 $logfile = shift @ARGV;
 if (not defined $logfile) {
-   $logfile = `ls -tr *rc.log | tail -1`;
+   $logfile = `ls -tr *rc.log 2>/dev/null | tail -1`;
+   chomp $logfile;
+}
+
+if (! -e $logfile) {
+  die "No log file found. logfile=$logfile \n";
 }
 
 my @substitutions = $no_default_subs ? (@user_substitutions) : (@default_substitutions, @user_substitutions);
 
+my $is_interactive = (-t STDOUT) ? 1 : 0;
+sub my_colored {
+  my ($string, $color) = @_;
+  if ($is_interactive) {
+    return colored($string, $color);
+  } else {
+    return $string;
+  }
+}
+
+################################################################################
+# Takes seconds as input and creates a human-readable duration string like : '24387 s (6h 46m)'
+################################################################################
+
+sub duration_str {
+  my ($input) = @_;
+  my $seconds = int($input);
+  my $hours   = int($seconds / 3600);
+  my $minutes = int(($seconds % 3600) / 60);
+  my $hms_str = ($hours > 0 and $minutes > 0) ? "${hours}h ${minutes}m" : ($hours > 0 ) ? "${hours}h" : ($minutes > 0 ) ? "${minutes}m" : "${seconds}s";
+  return $hms_str;
+}
 
 # 
 # Actually parse the log file.
@@ -65,13 +94,23 @@ my $wns = "NA"; # WNS for the last path that we process.
 my (@words, $word, @path_words);
 my $total_count = 0;
 my $partial_run = 1;
+my $design_instances = undef;
+my $design_area = undef;
+my $area_desc   = '';
+my $start_log_time  = undef;
+my $line = undef;
 
 # iterate over words, completely ignoring new lines.
 # When we find 'WNS:', the next word is assumed to be the WNS value, followed by 'Path:', $ps, '-->' and $pe.
 # When all 6 words have been found, we are ready to put something in the hash.
 OUTER:
 while (<LOG>) {
-  @words = split;
+  $line = $_;
+
+  # Skip info and warning lines to speed things up.
+  next if ($line =~ /^(Info    |Warning |        ):/);
+
+  @words = split(" " , $line);
   foreach $word (@words) {
 
     # Stop if we hit the count limit.
@@ -91,6 +130,17 @@ while (<LOG>) {
       $ps  = $path_words[-3];
       $pe  = $path_words[-1];
       assert($path_words[-2] eq "-->");
+    } elsif ($path_words[-4] eq "Leaf" and $path_words[-3] eq "Instance" and $path_words[-2] eq "Count") {
+      $design_instances = $path_words[-1];
+      next;
+    } elsif ($path_words[-8] eq "Sourcing" and $path_words[-7] eq "'/amb/tools2/local/tv.tcl'") {
+      my $time_string = join(" ", $path_words[-6], $path_words[-5], $path_words[-4], $path_words[-3], $path_words[-1]);
+      $start_log_time = Time::Piece->strptime($time_string, "(%a %b %d %T %Y)...");
+      next;
+    } elsif ($path_words[-4] eq "Total" and $path_words[-3] eq "Area") {
+      $area_desc   = $path_words[-2];
+      $design_area = $path_words[-1];
+      next;
     } else {
       if ($path_words[-2] eq 'Normal' and $path_words[-1] eq 'exit.') { $partial_run = 0; } # 'Normal exit' implies run completed.
       next;
@@ -112,11 +162,21 @@ while (<LOG>) {
 }
 my $last_wns = $wns;
 
+my $log_duration_str = undef;
+if (defined $start_log_time) {
+  my $epoch_timestamp = (stat(LOG))[9];
+  my $last_log_time   = localtime($epoch_timestamp);
+  my $log_duration    = $last_log_time - $start_log_time + $last_log_time->localtime->tzoffset; # tzoffset is a time zone hack.
+  $log_duration_str   = &duration_str($log_duration->seconds);
+  #print $start_log_time . " -> " . $last_log_time . " : $log_duration\n"
+}
+
 # Collect data into a results array.
 my $count;
 my @results = ();
 my $ps_width = 0;
 my $pe_width = 0;
+if (0 < $min_print and $min_print < 1) { $min_print = int($min_print * $total_count); }
 
 foreach $ps (keys %paths) {
   foreach $pe (keys %{$paths{$ps}}) {
@@ -146,7 +206,7 @@ my @octave_vars = ();
 foreach my $r (@sorted_results) {
   ($count, $ps, $pe) = @$r;
   my $color = ($count > 100) ? "bold" : "reset";
-  printf colored("%-8d: %-${ps_width}s  --> %-${pe_width}s\n", $color), $count, $ps, $pe;
+  printf my_colored("%-12d: %-${ps_width}s  --> %-${pe_width}s\n", $color), $count, $ps, $pe;
   if ($octave) {
     my $var_name = "${ps}___to___${pe}";
     $var_name =~ s/\W/_/g;
@@ -165,9 +225,14 @@ close(OCTAVE_DATA);
 
 my $total_desc_string = ($stop_count == $total_count) ? "Number of RC paths included in this report" : "Total number of paths worked on by RC" . ( $partial_run ? " so far" : " in full run");
 my $l_wns_desc_string = ($stop_count == $total_count) ? "WNS of last path processed in this report" : "Last WNS reported by RC";
-printf "%-8d: ${total_desc_string}.\n", $total_count;
+printf "%-12d: ${total_desc_string}.\n", $total_count;
 print "--\n";
-printf "%-8s: ${l_wns_desc_string}.\n\n", $last_wns;
+printf "%-12s: ${l_wns_desc_string}.\n", $last_wns;
+print "--\n" if (defined $design_instances or defined $design_area);
+printf "%-12s: Leaf Instance Count\n", $design_instances if (defined $design_instances);
+printf "%-12s: Total Area $area_desc\n", $design_area if (defined $design_area);
+printf "%-12s: Elapsed Time\n", $log_duration_str if (defined $log_duration_str);
+print "\n";
 
 if ($octave) {
   open (OCTAVE_SCRIPT, ">syn_paths.octave.scr");
@@ -249,6 +314,12 @@ I do a few standard substitutions on the signal names so that very similar paths
 
   You can specify -min <N> to only print paths with count >= N.
   This is useful to trim the report to only the higher count paths.
+
+  If min_print is a fractional number between 0 and 1, it is scaled by the total
+  path count to only report paths which have count greater than the specified
+  percentage of the total number of paths so far.  i.e. if the total number of 
+  paths if 960 and you specify '-min 0.05' , then it's the same as specifying 
+  '-min 48'. (because 960 * 0.05 == 48).
 
 =item -stop_count=i
   
