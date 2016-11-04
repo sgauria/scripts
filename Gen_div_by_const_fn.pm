@@ -67,6 +67,11 @@ DONE
       $output .= <<DONE;
    u${ps}_t \t[$npm1:0] q_${i};
 DONE
+      if ($i > 1) {
+        $output .= <<DONE;
+   u${ps}_t \t[$npm1:0] aq_${i};
+DONE
+      }
       if ($i > 0) {
         $output .= <<DONE;
    u${cN}_t \t[$npm1:0] r_${i};
@@ -112,7 +117,6 @@ DONE
       my $k = $j - 1;
       $output .= <<DONE;
     // Refine result for each pair of pieces
-    q_${j} = 0; r_${j} = 0;
     for (int i = 0; i < $np; i++) begin
       case({r_${k}[2*i+:2]})
 DONE
@@ -122,13 +126,14 @@ DONE
           my $total_rem_div_N = int($total_rem / $N);
           my $total_rem_mod_N = $total_rem % $N;
           $output .= <<DONE;
-        {${cN}'d${rem1}, ${cN}'d${rem2}} : begin q_${j}[i] = q_${k}[2*i+:2] + $total_rem_div_N; r_${j}[i] = $total_rem_mod_N; end // rem = $total_rem = $total_rem_div_N * $N + $total_rem_mod_N
+        {${cN}'d${rem1}, ${cN}'d${rem2}} : begin aq_${j}[i] = $total_rem_div_N; r_${j}[i] = $total_rem_mod_N; end // rem = $total_rem = $total_rem_div_N * $N + $total_rem_mod_N
 DONE
         }
       }
     $output .= <<DONE;
-        default      : begin q_${j}[i] = q_${k}[2*i+:2] ; r_${j}[i] = r_${k}[2*i]; end
+        default      : begin aq_${j}[i] = 0; r_${j}[i] = r_${k}[2*i]; end
       endcase
+      q_${j}[i] = q_${k}[2*i+:2] + aq_${j}[i];
     end
 
 DONE
