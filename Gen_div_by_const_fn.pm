@@ -32,51 +32,59 @@ sub gen_div_by_const_fn{
   $obits //= &clog2( 1.0*(2**$ibits)/$N );
   $fname //= "div_by_${N}_fn";
 
+  my $ibits_m1 = $ibits - 1;
+  my $obits_m1 = $obits - 1;
+
   # Factorize N into power of 2 (wizard) and non-power of 2(muggle).
   my $Nw = 1;
   while (($N % ($Nw * 2)) == 0) { $Nw *= 2; }
   my $Nm = $N/$Nw;
 
-  my $cN = clog2($N);
-  my $cNw = clog2($Nw);
-  my $cNm = clog2($Nm);
-  my $cNWr = $cNw > 1 ? $cNw : 1;
+  my $lN = clog2($N);
+  my $lNw = clog2($Nw);
+  my $lNm = clog2($Nm);
+  my $lN_m1 = $lN - 1;
+  my $lNw_m1 = $lNw - 1;
+  my $lNm_m1 = $lNm - 1;
 
   # Header
   my $return_type = "div_result_${ibits}_${N}_t";
   my $output = "";
   $output .= <<XYZ;
   typedef struct packed {
-    u${obits}_t \tq; // quotient
-    u${cN}_t \tr; // remainder
+    logic [${obits_m1}:0] \t q; // quotient
+    logic [${lN_m1}:0] \t r; // remainder
   } $return_type;
 
-  function $return_type $fname ( u${ibits}_t x );
+  function $return_type $fname ( logic [${ibits_m1}:0] x );
    $return_type result;
-   u${ibits}_t \twq;
-   u${cNwr}_t \twr;
+   logic [${ibits_m1}:0] \t wq;
+XYZ
+  $output .= <<XYZ if ($lNw > 0);
+   logic [${lNw_m1}:0] \t wr;
 XYZ
 
   # Declarations
   my ($piece_sz, $num_pieces);
-  $piece_sz = $cNm + 2;
+  $piece_sz = $lNm + 2;
   $num_pieces = 1;
   $num_pieces *= 2 while ($num_pieces * $piece_sz < $ibits);
 
   my ($np, $ps, $i) = ($num_pieces, $piece_sz, 0);
   while ($np >= 1) {
-    my $npm1 = $np - 1;
+    my $np_m1 = $np - 1;
+    my $ps_m1 = $ps - 1;
     $output .= <<XYZ;
-   u${ps}_t \t[$npm1:0] q_${i};
+   logic [$np_m1:0][${ps_m1}:0] \t q_${i};
 XYZ
     if ($i > 1) {
       $output .= <<XYZ;
-   u${ps}_t \t[$npm1:0] aq_${i};
+   logic [$np_m1:0][${ps_m1}:0] \t aq_${i};
 XYZ
     }
     if ($i > 0) {
       $output .= <<XYZ;
-   u${cNm}_t \t[$npm1:0] r_${i};
+   logic [$np_m1:0][${lNm_m1}:0] \t r_${i};
 XYZ
       $np /= 2; $ps *= 2; 
     }
@@ -92,22 +100,19 @@ XYZ
   if ($Nw > 1) {
   $output .= <<XYZ;
     // Handle the power of 2 part first.
-    wq = x[$ibits-1:$cNw];
-    wr = x[$cNw-1:0];
-
+    wq = x[$ibits_m1:$lNw];
+    wr = x[$lNw_m1:0];
 XYZ
   } else {
   $output .= <<XYZ;
-    // Handle the power of 2 part first.
     wq = x;
-    wr = 0;
-
 XYZ
   }
 
   if ($Nm > 1) {
     # Calculate first layer : divide each piece by $N.
     $output .= <<XYZ;
+
     // Now work on the hard part : non-power of 2.
     // Separate input into $num_pieces pieces of size $piece_sz bits each.
     q_0 = wq;
@@ -140,13 +145,13 @@ XYZ
     for (int i = 0; i < $np; i++) begin
       case({r_${k}[2*i+:2]})
 XYZ
-      foreach my $rem1 (1 .. ($Nm-1)) {
-        foreach my $rem2 (0 .. ($Nm-1)) {
+      foreach my $rem1 (1 .. ($Nm - 1)) {
+        foreach my $rem2 (0 .. ($Nm - 1)) {
           my $total_rem = ($rem1 << ($ps/2)) + $rem2;
           my $total_rem_div_Nm = int($total_rem / $Nm);
           my $total_rem_mod_Nm = $total_rem % $Nm;
           $output .= <<XYZ;
-        {${cNm}'d${rem1}, ${cNm}'d${rem2}} : begin aq_${j}[i] = $total_rem_div_Nm; r_${j}[i] = $total_rem_mod_Nm; end // rem = $total_rem = $total_rem_div_Nm * $Nm + $total_rem_mod_Nm
+        {${lNm}'d${rem1}, ${lNm}'d${rem2}} : begin aq_${j}[i] = $total_rem_div_Nm; r_${j}[i] = $total_rem_mod_Nm; end // rem = $total_rem = $total_rem_div_Nm * $Nm + $total_rem_mod_Nm
 XYZ
         }
       }
@@ -165,7 +170,7 @@ XYZ
 XYZ
     if ($Nw > 1) {
       $output .= <<XYZ;
-    result.r = r_${j}[0] << $cNw + wr;
+    result.r = r_${j}[0] << $lNw + wr;
 XYZ
     } else {
       $output .= <<XYZ;
@@ -174,6 +179,7 @@ XYZ
     }
   } else {
     $output .= <<XYZ;
+
     result.q = wq;
     result.r = wr;
 XYZ
