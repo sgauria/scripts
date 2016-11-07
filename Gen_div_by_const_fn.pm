@@ -1,6 +1,11 @@
 package Gen_div_by_const_fn;
 require Exporter;
 
+# Usage :
+#   use lib "appropriate_path"
+#   use Gen_div_by_const_fn;
+#   print gen_div_by_const_fn(7, 32);
+#
 # This module provides a perl function 'gen_div_by_const_fn'
 # that generates a verilog function (e.g. 'div_by_3_fn')
 # that implements division by a constant.
@@ -9,6 +14,18 @@ require Exporter;
 # raw verilog code like :
 # ' assign q = x/3; '
 #
+# An example to illustrate what the generated fn is doing.
+# Say we want to divide 996 (0x3E4) by 3.
+#  0x3E4 
+# =  0x100 * 0x3 + 0x10 * 0xE + 0x1 * 0x4                          // Split input into groups of 4 bits.
+# =  0x100 * (1*3 + 0) + 0x10 * (4*3 + 2) + 0x1 * (1*3 + 1)        // Divide each 4bit number by 3 using a LUT. Get respective q,r.
+# =  0x100 * (1*3 + 0) + (3 * (0x10*4 + 0x1*1) + (0x10*2 + 0x1*1)) // Combine q's and r's in pairs.
+# =  0x100 * (1*3 + 0) + (3 * 0x41 + 0x21)                         // ''
+# =  0x100 * (1*3 + 0) + (3 * 0x41 + (3*0xB + 0))                  // Divide pair of r's by 3 and figure out the part to add to the combined q and the net remainder.
+# =  0x100 * (1*3 + 0) + (3 * (0x41 + 0xB) + 0))                   // Adjust the combined q by the adjustment from the previous step.
+# =  0x100 * (1*3 + 0) + (3 * 0x4C + 0))                           // ''
+# =  0x14C * 3 + 0;                                                // Keep doing tree reduction until we reach a final q and r representing the whole original input.
+# => q = 0x14C , r = 0                                             // We are done.
 
 our @ISA = qw(Exporter);
 our @EXPORT = qw(gen_div_by_const_fn);
@@ -21,11 +38,17 @@ sub clog2 {
 }
 
 sub gen_div_by_const_fn{
-  my ($N, $ibits, $obits, $fname) = @_;
-  # N = constant to divide by.
-  # ibits = input bits (default = 32)
-  # obits = output quotient bits (optional)
-  # fname = function name (optional).
+  my ($N, $ibits, $piece_sz, $obits, $fname) = @_;
+  # N        = constant to divide by.
+  # ibits    = input bits (default = 32)
+  # piece_sz = starting unit of tree in bits (optional)
+  # obits    = output quotient bits (optional)
+  # fname    = function name (optional).
+  #
+  #  piece_sz has a reasonable default, but is worth playing with if you need
+  #  to improve QOR.  The effects of modifying piece_sz are non-linear and
+  #  non-monotonic.  This is because it affects both the work in done in each
+  #  layer and the number of layers.
 
   die "N must be defined. N=$N." unless (defined $N);
   $ibits //= 32;
@@ -47,6 +70,11 @@ sub gen_div_by_const_fn{
   my $lNw_m1 = $lNw - 1;
   my $lNm_m1 = $lNm - 1;
 
+  # Figure out piece_sz and num_pieces
+  $piece_sz //= $lNm + 2;
+  my $num_pieces = 1;
+  $num_pieces *= 2 while ($num_pieces * $piece_sz < $ibits);
+
   # Header
   my $return_type = "div_result_${ibits}_${N}_t";
   my $output = "";
@@ -65,11 +93,6 @@ XYZ
 XYZ
 
   # Declarations
-  my ($piece_sz, $num_pieces);
-  $piece_sz = $lNm + 2;
-  $num_pieces = 1;
-  $num_pieces *= 2 while ($num_pieces * $piece_sz < $ibits);
-
   my ($np, $ps, $i) = ($num_pieces, $piece_sz, 0);
   while ($np >= 1) {
     my $np_m1 = $np - 1;
