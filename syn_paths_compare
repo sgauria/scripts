@@ -20,13 +20,28 @@ if ($#ARGV >= 0 && $ARGV[0] =~ /.log$/) {
 if ($#ARGV >= 0) {
   $sp_opts = join(" ", @ARGV);
 }
+
+my ($module);
+# Figure out a new log matching the old log if old log was specified.
 if (not defined $new_log) {
-  $new_log = `ls -tr sge*.log 2>/dev/null | tail -1`;
-}
-if (not defined $old_log) {
-  $old_log = `ls -tr sge*.log 2>/dev/null | tail -2 | head -1`;
+  if (defined $old_log and $old_log =~ /sge_(.*)_script_\d+.log/) {
+    $module = $1;
+    $new_log = `ls -tr sge_${module}_script*.log 2>/dev/null | tail -1`;
+  } else {
+    $new_log = `ls -tr sge*.log 2>/dev/null | tail -1`;
+  }
 }
 chomp $new_log;
+
+# Figure out a old log matching the new log if new log was specified.
+if (not defined $old_log) {
+  if ($new_log =~ /sge_(.*)_script_\d+.log/) {
+    my $module = $1;
+    $old_log = `ls -tr sge_${module}_script*.log 2>/dev/null | tail -2 | head -1`;
+  } else {
+    $old_log = `ls -tr sge*.log 2>/dev/null | tail -2 | head -1`;
+  }
+}
 chomp $old_log;
 
 # Parse raw syn_paths output (for new log) to decide what min_print and stop_count values to use.

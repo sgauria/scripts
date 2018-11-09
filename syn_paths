@@ -9,7 +9,6 @@ use Term::ANSIColor qw(colored);
 use List::Util qw(max);
 use Getopt::Long;
 use Pod::Usage;
-use Carp::Assert;
 use Time::Piece;
 use Time::Seconds;
 
@@ -99,6 +98,7 @@ my $design_area = undef;
 my $area_desc   = '';
 my $start_log_time  = undef;
 my $line = undef;
+my $total_runtime_from_log = undef;
 
 # iterate over words, completely ignoring new lines.
 # When we find 'WNS:', the next word is assumed to be the WNS value, followed by 'Path:', $ps, '-->' and $pe.
@@ -124,12 +124,12 @@ while (<LOG>) {
       $wns = $path_words[-5];
       $ps  = $path_words[-3];
       $pe  = $path_words[-1];
-      assert($path_words[-2] eq "-->");
+      die "unsupported format" unless ($path_words[-2] eq "-->");
     } elsif ($path_words[-4] eq "Path:") {
       $wns = $path_words[-9];
       $ps  = $path_words[-3];
       $pe  = $path_words[-1];
-      assert($path_words[-2] eq "-->");
+      die "unsupported format" unless ($path_words[-2] eq "-->");
     } elsif ($path_words[-4] eq "Leaf" and $path_words[-3] eq "Instance" and $path_words[-2] eq "Count") {
       $design_instances = $path_words[-1];
       next;
@@ -140,6 +140,9 @@ while (<LOG>) {
     } elsif ($path_words[-4] eq "Total" and $path_words[-3] eq "Area") {
       $area_desc   = $path_words[-2];
       $design_area = $path_words[-1];
+      next;
+    } elsif ($path_words[-6] eq "total" and $path_words[-5] eq "run" and $path_words[-4] eq "time" and $path_words[-3] eq "is" and $path_words[-1] eq "minutes") {
+      $total_runtime_from_log = $path_words[-2] * 60;
       next;
     } else {
       if ($path_words[-2] eq 'Normal' and $path_words[-1] eq 'exit.') { $partial_run = 0; } # 'Normal exit' implies run completed.
@@ -168,6 +171,9 @@ if (defined $start_log_time) {
   my $last_log_time   = localtime($epoch_timestamp);
   my $log_duration    = $last_log_time - $start_log_time + $last_log_time->localtime->tzoffset; # tzoffset is a time zone hack.
   $log_duration_str   = &duration_str($log_duration->seconds);
+  if (defined $total_runtime_from_log) { # override with runtime from log (if available) because that is more reliable (not messed up by copying files around).
+    $log_duration_str = &duration_str($total_runtime_from_log);
+  }
   #print $start_log_time . " -> " . $last_log_time . " : $log_duration\n"
 }
 
